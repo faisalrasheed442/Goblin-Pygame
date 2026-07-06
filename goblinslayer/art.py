@@ -13,8 +13,11 @@ from __future__ import annotations
 import os
 import pygame
 
-ASSET_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "svg")
-ASSET_DIR = os.path.normpath(ASSET_DIR)
+from . import paths
+
+# Generated SVGs are written to a writable data dir (project root from source,
+# a per-user app folder when frozen into an .exe).
+ASSET_DIR = paths.data("assets", "svg")
 
 # ---------------------------------------------------------------------------
 # SVG helpers

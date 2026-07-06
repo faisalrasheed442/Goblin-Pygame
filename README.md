@@ -135,7 +135,24 @@ files** for any of the artwork; it's all generated on first run into `assets/svg
 
 > The full control list is also shown on the **pause screen** (`Esc`) any time in-game.
 
-## 🚀 Installation & running
+## ⬇️ Download (Windows)
+
+Grab the latest **standalone `.exe`** from the
+[**Releases**](../../releases) page — no Python install required. Just download and
+run `GoblinSlayer-vX.Y.Z.exe`. (Your progress saves to
+`%LOCALAPPDATA%\GoblinSlayer\savegame.json`.)
+
+Every time a version tag is pushed, a GitHub Actions pipeline
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) builds the Windows
+executable with PyInstaller, smoke-tests it, and publishes it to a new Release.
+
+> **Maintainers — cutting a release:**
+> ```bash
+> git tag v1.0.0
+> git push origin v1.0.0     # → CI builds GoblinSlayer-v1.0.0.exe and publishes the release
+> ```
+
+## 🚀 Installation & running (from source)
 
 Requires **Python 3.10+**.
 

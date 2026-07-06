@@ -8,10 +8,10 @@ from __future__ import annotations
 import json
 import os
 
+from . import paths
 from .config import PLAYER, UPGRADES, CONSUMABLES, EQUIPMENT
 
-SAVE_PATH = os.path.join(os.path.dirname(__file__), "..", "savegame.json")
-SAVE_PATH = os.path.normpath(SAVE_PATH)
+SAVE_PATH = paths.data("savegame.json")
 
 
 class Progression:

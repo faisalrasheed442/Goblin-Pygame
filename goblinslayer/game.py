@@ -26,8 +26,10 @@ from .config import (WIDTH, HEIGHT, FPS, TITLE as CAPTION, GROUND_Y, STAGES, UPG
 from .entities import (Player, Enemy, Boss, Projectile, Pickup, Particle,
                        FloatingText, burst)
 from .progression import Progression
+from . import paths
+from . import __version__
 
-SOUND_DIR = os.path.join(os.path.dirname(__file__), "..", "Game")
+SOUND_DIR = paths.resource("Game")
 
 # Game states
 TITLE, STORY, PLAYING, SHOP, PAUSE, GAMEOVER, VICTORY = range(7)
@@ -207,11 +209,19 @@ class Game:
 
     # --------------------------------------------------------------- main loop
     def run(self):
+        # CI/smoke hook: GOBLIN_SMOKE=<frames> runs headlessly then exits cleanly,
+        # so a build can be verified without a display or human input.
+        smoke = os.environ.get("GOBLIN_SMOKE")
+        smoke_frames = int(smoke) if smoke and smoke.isdigit() else (150 if smoke else 0)
+        frame = 0
         while self.running:
             self.clock.tick(FPS)
             self.handle_events()
             self.update()
             self.draw()
+            frame += 1
+            if smoke_frames and frame >= smoke_frames:
+                self.running = False
         self.prog.save()
 
     def _to_logical(self, pos):
@@ -659,6 +669,8 @@ class Game:
                 (WIDTH // 2, HEIGHT - 26), 20, WHITE, center=True, bold=False)
         ui.text(self.canvas, "M mute • F11 fullscreen", (WIDTH - 130, 20), 15,
                 (180, 184, 196), center=True, bold=False)
+        ui.text(self.canvas, f"v{__version__}", (16, HEIGHT - 26), 15,
+                (150, 156, 170), bold=False)
 
     def draw_story(self):
         self._dim(150)

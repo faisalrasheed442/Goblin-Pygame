@@ -1,0 +1,72 @@
+name: Build & Release EXE
+
+# Builds a standalone Windows .exe with PyInstaller and publishes a GitHub Release
+# whenever a version tag is pushed, e.g.:
+#
+#     git tag v1.0.0
+#     git push origin v1.0.0
+#
+# You can also run it manually from the Actions tab (workflow_dispatch) to build a
+# test .exe without creating a release.
+
+on:
+  push:
+    tags:
+      - 'v*'          # v1.0.0, v1.2.3, v2.0.0-beta, ...
+  workflow_dispatch:  # manual "Run workflow" button (build-only, no release)
+
+permissions:
+  contents: write     # required for softprops/action-gh-release to create the release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r Requirements.txt
+          pip install pyinstaller
+
+      - name: Build one-file EXE
+        run: >
+          pyinstaller --onefile --windowed --name GoblinSlayer
+          --add-data "Game;Game" main.py
+
+      - name: Smoke-test the EXE (headless)
+        env:
+          GOBLIN_SMOKE: '150'
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: |
+          $p = Start-Process -FilePath dist/GoblinSlayer.exe -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "EXE smoke test failed (exit $($p.ExitCode))" }
+          Write-Host "EXE launched, ran and exited cleanly."
+
+      - name: Tag the EXE with the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: Rename-Item dist/GoblinSlayer.exe "GoblinSlayer-${{ github.ref_name }}.exe"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoblinSlayer-windows
+          path: dist/*.exe
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Goblin Slayer ${{ github.ref_name }}
+          files: dist/*.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
