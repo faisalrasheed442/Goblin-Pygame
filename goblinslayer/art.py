@@ -470,6 +470,7 @@ _REGISTRY = {
     "hero_t2": lambda: hero_svg(armor="#a878ff", armor_dark="#4a2aa0", cape="#5cf0d0",
                                 trim="#eaf6ff", hair="#1a1030"),
     "slash": slash_svg,
+    "eslash": lambda: slash_svg(color="#ff9a4a"),   # enemy weapon-swing arc
     "grunt": grunt_svg,
     "archer": archer_svg,
     "bat": bat_svg,

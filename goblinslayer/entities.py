@@ -288,9 +288,11 @@ class Player:
             self.vy = -self.stats["jump_v"]
             self.on_ground = False
             burst(ctx, self.x + self.w / 2, self.y + self.h, (200, 200, 200), 7, 3, 3, 16, 0.15)
-        if keys[pygame.K_j] or keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
+        # combat: mouse OR keyboard (left click / J = shoot, right click / K = slash)
+        mb = pygame.mouse.get_pressed(3)
+        if mb[0] or keys[pygame.K_j] or keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
             self.shoot(ctx)
-        if keys[pygame.K_k] or keys[pygame.K_l]:
+        if mb[2] or keys[pygame.K_k] or keys[pygame.K_l]:
             self.melee(ctx)
 
     def shoot(self, ctx):
@@ -430,6 +432,15 @@ class Player:
 # Enemies
 # ---------------------------------------------------------------------------
 class Enemy:
+    """Enemies with real, telegraphed attacks.
+
+    Melee grunts *approach → wind up → swing* a weapon (an actual attack hitbox that
+    only hurts during the swing), then recover — they no longer damage you just by
+    touching.  Bats *hover → telegraph → dive*.  Archers loose aimed arrows.
+    """
+    # melee timing (frames)
+    WINDUP, STRIKE, RECOVER, REACH = 20, 11, 30, 62
+
     def __init__(self, kind, x, stage_index=0):
         cfg = ENEMIES[kind]
         self.kind = kind
@@ -437,7 +448,7 @@ class Enemy:
         self.w, self.h = cfg["w"], cfg["h"]
         self.max_hp = int(cfg["hp"] * (1 + stage_index * STAGE_HP_SCALE))
         self.hp = self.max_hp
-        self.speed = cfg["speed"] * (1.1 if stage_index and False else 1.0)
+        self.speed = cfg["speed"]
         self.damage = int(cfg["damage"] * (1 + stage_index * STAGE_DMG_SCALE))
         self.coins = cfg["coins"]
         self.x = x
@@ -447,10 +458,14 @@ class Enemy:
         self.on_ground = self.role != "flyer"
         self.facing = -1
         self.anim = random.uniform(0, 10)
-        self.attack_cd = random.randint(40, 100)
         self.hit_flash = 0
         self.dead = False
         self.sprite = kind
+        # attack state machine
+        self.atk = "move"                 # move | windup | strike | recover
+        self.atk_t = random.randint(20, 70)
+        self.hit_done = False
+        self.lunge = 0.0                  # forward draw offset while attacking
 
     @property
     def rect(self):
@@ -459,6 +474,15 @@ class Enemy:
     @property
     def hitbox(self):
         return pygame.Rect(int(self.x + 6), int(self.y + 4), self.w - 12, self.h - 8)
+
+    def _attack_rect(self):
+        """The arc/reach that actually deals damage during a swing or dive."""
+        r = pygame.Rect(0, 0, 56, 56)
+        if self.facing > 0:
+            r.midleft = (self.x + self.w - 8, self.y + self.h * 0.5)
+        else:
+            r.midright = (self.x + 8, self.y + self.h * 0.5)
+        return r
 
     def take_damage(self, dmg, ctx, kx=0):
         self.hp -= dmg
@@ -480,17 +504,20 @@ class Enemy:
 
     def update(self, ctx):
         self.hit_flash = max(0, self.hit_flash - 1)
-        self.attack_cd = max(0, self.attack_cd - 1)
+        self.atk_t = max(0, self.atk_t - 1)
+        self.lunge *= 0.8
         p = ctx.player
         pcx = p.x + p.w / 2
-        self.facing = -1 if pcx < self.x + self.w / 2 else 1
+        # face the player, but lock facing during a swing so the arc lands where aimed
+        if self.atk in ("move", "recover"):
+            self.facing = -1 if pcx < self.x + self.w / 2 else 1
 
         if self.role == "melee":
-            self._ai_melee(pcx)
+            self._ai_melee(ctx, p, pcx)
         elif self.role == "ranged":
             self._ai_ranged(ctx, pcx, p)
         elif self.role == "flyer":
-            self._ai_flyer(p)
+            self._ai_flyer(ctx, p)
 
         if self.role != "flyer":
             self.vy = min(self.vy + GRAVITY, TERMINAL_VY)
@@ -503,51 +530,117 @@ class Enemy:
         self.vx *= 0.8 if self.role != "flyer" else 0.9
         self.anim += 0.2
 
-        if self.hitbox.colliderect(p.hitbox):
-            p.take_damage(self.damage, self.x + self.w / 2, ctx)
-
-    def _ai_melee(self, pcx):
+    # -- melee: approach → windup → swing → recover -------------------------
+    def _ai_melee(self, ctx, p, pcx):
         d = pcx - (self.x + self.w / 2)
-        if abs(d) > 44:
-            self.vx += math.copysign(self.speed * 0.5, d)
-            self.vx = max(-self.speed, min(self.speed, self.vx))
+        if self.atk == "move":
+            if abs(d) > self.REACH:
+                self.vx += math.copysign(self.speed * 0.55, d)
+                self.vx = max(-self.speed, min(self.speed, self.vx))
+            elif self.atk_t <= 0 and self.on_ground:
+                self.atk, self.atk_t, self.hit_done = "windup", self.WINDUP, False
+                ctx.add_text(self.x + self.w / 2, self.y - 14, "!", (255, 210, 90), 26)
+        elif self.atk == "windup":
+            self.vx *= 0.6
+            self.lunge = -self.facing * 5          # lean back to telegraph
+            if self.atk_t <= 0:
+                self.atk, self.atk_t = "strike", self.STRIKE
+                self.vx = self.facing * 4          # lunge into the swing
+        elif self.atk == "strike":
+            self.lunge = self.facing * 10
+            if not self.hit_done and self._attack_rect().colliderect(p.hitbox):
+                p.take_damage(self.damage, self.x + self.w / 2, ctx)
+                burst(ctx, p.x + p.w / 2, p.y + p.h / 2, (255, 160, 90), 8, 5)
+                self.hit_done = True
+            if self.atk_t <= 0:
+                self.atk, self.atk_t = "recover", self.RECOVER
+        elif self.atk == "recover":
+            self.vx *= 0.7
+            if self.atk_t <= 0:
+                self.atk, self.atk_t = "move", random.randint(10, 30)
 
     def _ai_ranged(self, ctx, pcx, p):
         d = pcx - (self.x + self.w / 2)
         if abs(d) < 300:
             self.vx -= math.copysign(self.speed * 0.4, d)
-        elif abs(d) > 440:
+        elif abs(d) > 460:
             self.vx += math.copysign(self.speed * 0.4, d)
         self.vx = max(-self.speed, min(self.speed, self.vx))
-        if self.attack_cd == 0 and abs(d) < 560:
-            self.attack_cd = random.randint(80, 150)
-            ang = math.atan2((p.y + p.h / 2) - (self.y + self.h / 2), d) + random.uniform(-0.08, 0.08)
-            spd = 7.5
-            ctx.enemy_shots.append(Projectile(
-                self.x + self.w / 2, self.y + self.h / 2,
-                math.cos(ang) * spd, math.sin(ang) * spd, self.damage, "arrow", 22, False))
+        # telegraph the shot with a short draw-back
+        if self.atk == "move" and self.atk_t <= 0 and abs(d) < 620:
+            self.atk, self.atk_t = "windup", 16
+        elif self.atk == "windup":
+            self.vx *= 0.4
+            self.lunge = -self.facing * 3
+            if self.atk_t <= 0:
+                ang = math.atan2((p.y + p.h / 2) - (self.y + self.h / 2), d) + random.uniform(-0.06, 0.06)
+                spd = 8.0
+                ctx.enemy_shots.append(Projectile(
+                    self.x + self.w / 2, self.y + self.h / 2,
+                    math.cos(ang) * spd, math.sin(ang) * spd, self.damage, "arrow", 22, False))
+                self.atk, self.atk_t = "move", random.randint(70, 130)
 
-    def _ai_flyer(self, p):
-        tx, ty = p.x + p.w / 2, p.y + p.h / 2 - 24
-        ang = math.atan2(ty - (self.y + self.h / 2), tx - (self.x + self.w / 2))
-        self.vx += math.cos(ang) * 0.28
-        self.vy += math.sin(ang) * 0.22 + math.sin(self.anim) * 0.15
-        self.vx = max(-self.speed, min(self.speed, self.vx))
-        self.vy = max(-self.speed, min(self.speed, self.vy))
+    def _ai_flyer(self, ctx, p):
+        tx, ty = p.x + p.w / 2, p.y + p.h / 2
+        cx, cy = self.x + self.w / 2, self.y + self.h / 2
+        dist = math.hypot(tx - cx, ty - cy)
+        if self.atk == "move":
+            # circle above/around the player at a hover altitude
+            hover_y = p.y - 90
+            self.vx += math.copysign(0.2, tx - cx)
+            self.vy += (hover_y - self.y) * 0.02 + math.sin(self.anim) * 0.2
+            if self.atk_t <= 0 and dist < 320:
+                self.atk, self.atk_t, self.hit_done = "windup", 14, False
+                self._dtx, self._dty = tx, ty
+        elif self.atk == "windup":
+            self.vx *= 0.6; self.vy *= 0.6         # brief pause before the dive
+            if self.atk_t <= 0:
+                ang = math.atan2(self._dty - cy, self._dtx - cx)
+                self.vx = math.cos(ang) * self.speed * 2.6
+                self.vy = math.sin(ang) * self.speed * 2.6
+                self.atk, self.atk_t = "strike", 16
+        elif self.atk == "strike":
+            if not self.hit_done and self.hitbox.colliderect(p.hitbox):
+                p.take_damage(self.damage, cx, ctx)
+                burst(ctx, tx, ty, (255, 160, 90), 8, 5)
+                self.hit_done = True
+            if self.atk_t <= 0:
+                self.atk, self.atk_t = "recover", 26
+        elif self.atk == "recover":
+            self.vy += -0.25                        # peel back up
+            if self.atk_t <= 0:
+                self.atk, self.atk_t = "move", random.randint(30, 60)
+        self.vx = max(-self.speed * 2.8, min(self.speed * 2.8, self.vx))
+        self.vy = max(-self.speed * 2.8, min(self.speed * 2.8, self.vy))
         self.y += self.vy
-        self.y = max(80, min(GROUND_Y - self.h, self.y))
+        self.y = max(70, min(GROUND_Y - self.h, self.y))
 
     def draw(self, s):
         img = art.scaled_by_height(self.sprite, self.h)
         if self.facing > 0:
             img = pygame.transform.flip(img, True, False)
         bob = math.sin(self.anim) * (2 if self.role != "flyer" else 4)
+        # scale-up puff on windup to telegraph the attack
+        if self.atk == "windup":
+            gw = int(img.get_width() * 1.08)
+            gh = int(img.get_height() * 1.08)
+            img = pygame.transform.smoothscale(img, (gw, gh))
         if self.hit_flash > 0:
             img = img.copy()
             flash = pygame.Surface(img.get_size(), pygame.SRCALPHA)
             flash.fill((255, 255, 255, 150))
             img.blit(flash, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
-        s.blit(img, (self.x + self.w / 2 - img.get_width() / 2, self.y + bob))
+        ox = self.x + self.w / 2 - img.get_width() / 2 + self.lunge
+        s.blit(img, (ox, self.y + self.h - img.get_height() + bob))
+        # weapon swing arc during a melee strike
+        if self.role == "melee" and self.atk == "strike":
+            sl = art.scaled_by_height("eslash", 66)
+            if self.facing < 0:
+                sl = pygame.transform.flip(sl, True, False)
+            sl = sl.copy()
+            sl.set_alpha(int(255 * min(1.0, self.atk_t / self.STRIKE + 0.2)))
+            fx = self.x + self.w - 14 if self.facing > 0 else self.x - sl.get_width() + 14
+            s.blit(sl, (fx, self.y + self.h / 2 - sl.get_height() / 2))
         self._draw_hp(s)
 
     def _draw_hp(self, s):

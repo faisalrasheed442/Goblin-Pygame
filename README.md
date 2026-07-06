@@ -123,15 +123,17 @@ files** for any of the artwork; it's all generated on first run into `assets/svg
 | Action | Keys |
 | ------ | ---- |
 | Move | `A` / `D` or `←` / `→` |
-| Jump | `W` / `↑` / `Space` |
-| Shoot | `J` / `Ctrl` |
-| Melee slash | `K` / `L` |
-| **Super attack** (when charged) | `E` / `Q` |
+| Jump | `Space` / `W` / `↑` |
+| **Shoot** | **Left mouse** / `J` |
+| **Melee slash** | **Right mouse** / `K` |
+| **Super attack** (when charged) | `E` / `Shift` / `F` |
 | Use Health Potion / Shield / Rage | `1` / `2` / `3` |
-| Pause | `Esc` / `P` |
+| Pause & controls | `Esc` / `P` |
 | Fullscreen | `F11` |
 | Mute music | `M` |
 | Confirm menus | `Enter` / `Space` or mouse click |
+
+> The full control list is also shown on the **pause screen** (`Esc`) any time in-game.
 
 ## 🚀 Installation & running
 

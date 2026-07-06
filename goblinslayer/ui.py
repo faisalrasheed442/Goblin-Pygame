@@ -95,15 +95,18 @@ def draw_hud(surf, game):
     """Full in-battle HUD: health, super meter, currency, lives, consumables, buffs."""
     p = game.player
     prog = game.prog
+    bx = 86            # bar start x (clears the HP/SUPER labels)
+    bw = 250           # bar width
     # main panel
-    panel(surf, pygame.Rect(14, 12, 344, 104), alpha=175)
-    text(surf, "HP", (26, 20), 18, WHITE)
-    bar(surf, 66, 22, 250, 16, p.hp / p.max_hp, HP_BACK, HP_FILL)
-    text(surf, f"{max(0, int(p.hp))}/{int(p.max_hp)}", (322, 22), 14, (230, 200, 205), bold=False)
-    text(surf, "SUPER", (26, 46), 15, SUPER_FILL if p.super_ready else (170, 200, 220))
-    bar(surf, 66, 48, 250, 12, p.super / p.super_max, (24, 34, 50), SUPER_FILL, radius=5)
+    panel(surf, pygame.Rect(14, 12, bx + bw + 16, 104), alpha=175)
+    text(surf, "HP", (24, 22), 18, WHITE)
+    bar(surf, bx, 22, bw, 18, p.hp / p.max_hp, HP_BACK, HP_FILL)
+    text(surf, f"{max(0, int(p.hp))} / {int(p.max_hp)}", (bx + bw / 2, 31), 14,
+         (245, 235, 238), center=True, bold=True)
+    text(surf, "SUPER", (24, 47), 15, SUPER_FILL if p.super_ready else (170, 200, 220))
+    bar(surf, bx, 48, bw, 12, p.super / p.super_max, (24, 34, 50), SUPER_FILL, radius=5)
     if p.super_ready:
-        text(surf, "READY  (E)", (322, 46), 14, SUPER_FILL, bold=True)
+        text(surf, "READY!", (bx + bw / 2, 48), 12, (10, 20, 30), center=True, bold=True, shadow=False)
     # currency
     ci = art.scaled_by_height("coin", 24); surf.blit(ci, (24, 72))
     text(surf, str(prog.coins), (52, 74), 20, COIN)

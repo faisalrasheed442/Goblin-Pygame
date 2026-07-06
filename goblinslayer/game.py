@@ -261,7 +261,7 @@ class Game:
         elif self.state == PLAYING:
             if key in (pygame.K_ESCAPE, pygame.K_p):
                 self.state = PAUSE
-            elif key in (pygame.K_e, pygame.K_q):
+            elif key in (pygame.K_e, pygame.K_q, pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_f):
                 self.player.use_super(self)
             elif key == pygame.K_1:
                 self.use_consumable("potion")
@@ -639,8 +639,9 @@ class Game:
         ui.text(self.canvas, wave_txt, (WIDTH // 2, 60), 20, GOLD, center=True, bold=False)
         if self.boss and not self.boss.dead and self.boss.intro <= 0:
             ui.draw_boss_bar(self.canvas, self.boss)
-        ui.text(self.canvas, "A/D move • W jump • J shoot • K slash • E super • 1/2/3 items • Esc pause • F11 fullscreen",
-                (WIDTH // 2, HEIGHT - 20), 15, (220, 224, 232), center=True, bold=False)
+        # short, unobtrusive hint (bottom-right, clear of the item slots on the left)
+        ui.text(self.canvas, "Left-click / J: shoot   •   Esc: pause & controls",
+                (WIDTH - 260, HEIGHT - 26), 16, (206, 212, 224), center=True, bold=False)
 
     def _dim(self, alpha=150):
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
@@ -672,10 +673,27 @@ class Game:
                 (200, 230, 255), center=True)
 
     def draw_pause(self):
-        self._dim(160)
-        ui.text(self.canvas, "PAUSED", (WIDTH // 2, HEIGHT // 2 - 40), 72, WHITE, center=True)
-        ui.text(self.canvas, "Esc resume • M mute • F11 fullscreen",
-                (WIDTH // 2, HEIGHT // 2 + 34), 24, (210, 214, 224), center=True, bold=False)
+        self._dim(170)
+        ui.text(self.canvas, "PAUSED", (WIDTH // 2, 120), 72, WHITE, center=True)
+        rect = pygame.Rect(WIDTH // 2 - 320, 190, 640, 360)
+        ui.panel(self.canvas, rect)
+        ui.text(self.canvas, "CONTROLS", (WIDTH // 2, 224), 30, GOLD, center=True)
+        rows = [
+            ("Move", "A / D  or  Arrow keys"),
+            ("Jump", "Space  /  W  /  Up"),
+            ("Shoot", "Left-click  /  J"),
+            ("Slash (melee)", "Right-click  /  K"),
+            ("Super (when charged)", "E  /  Shift  /  F"),
+            ("Use Potion / Shield / Rage", "1  /  2  /  3"),
+            ("Pause  •  Mute  •  Fullscreen", "Esc  •  M  •  F11"),
+        ]
+        y = 268
+        for label, keysd in rows:
+            ui.text(self.canvas, label, (WIDTH // 2 - 290, y), 21, WHITE, bold=False)
+            ui.text(self.canvas, keysd, (WIDTH // 2 + 30, y), 21, (170, 210, 255), bold=True)
+            y += 40
+        ui.text(self.canvas, "Press Esc to resume", (WIDTH // 2, 566), 22,
+                (200, 230, 255), center=True)
 
     def draw_shop(self):
         self._dim(180)
