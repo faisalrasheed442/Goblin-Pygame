@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Game runtime
+savegame.json
+
+# Generated art (regenerated on first run via goblinslayer/art.py)
+assets/svg/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
