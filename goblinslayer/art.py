@@ -323,63 +323,138 @@ def heart_svg():
 
 
 # ===========================================================================
-# BACKGROUNDS  (full 960x540 scenery; the ground band is drawn by the engine)
+# ITEM / EFFECT ICONS
 # ===========================================================================
 
-def bg_forest_svg():
-    d = _lin("sky", [("0", "#1a2f4a"), ("0.5", "#2f5a6e"), ("1", "#6fa06a")], 0, 0, 0, 540)
-    b = f'<defs>{d}{_rad("moon", [("0", "#f6ffe8"), ("1", "#f6ffe8", "0")], 770, 110, 46)}</defs>'
-    b += f'<rect width="960" height="540" fill="url(#sky)"/>'
-    b += f'<circle cx="770" cy="110" r="46" fill="url(#moon)"/><circle cx="770" cy="110" r="30" fill="#eef7dd"/>'
-    # far hills
-    b += f'<path d="M0 360 Q240 300 480 350 Q720 400 960 340 L960 540 L0 540 Z" fill="#24463f" opacity="0.8"/>'
-    b += f'<path d="M0 410 Q200 360 460 410 Q740 460 960 400 L960 540 L0 540 Z" fill="#1c3a30"/>'
-    # trees (silhouettes)
-    for x, s in [(90, 1.0), (250, 0.7), (620, 0.9), (860, 1.1), (430, 0.6)]:
-        h = 150 * s
-        b += (f'<g transform="translate({x},{470}) scale({s})">'
-              f'<rect x="-6" y="-60" width="12" height="70" fill="#14261f"/>'
-              f'<path d="M0 -170 L40 -70 L-40 -70 Z" fill="#193024"/>'
-              f'<path d="M0 -130 L34 -50 L-34 -50 Z" fill="#1f3a2c"/>'
-              f'<path d="M0 -95 L28 -30 L-28 -30 Z" fill="#254634"/></g>')
-    # fireflies
-    for x, y in [(340, 250), (520, 300), (700, 220), (180, 320), (600, 180)]:
-        b += f'<circle cx="{x}" cy="{y}" r="2.4" fill="#d8ff8a" opacity="0.85"/>'
-    return _svg(960, 540, b)
+def icon_potion_svg():
+    b = f'<defs>{_lin("po", [("0", "#ff6a8a"), ("1", "#c81e3a")], 0, 12, 0, 30)}</defs>'
+    b += f'<rect x="13" y="2" width="6" height="6" rx="1" fill="#caa"/>'
+    b += f'<path d="M12 8 L20 8 L24 18 Q24 30 16 30 Q8 30 8 18 Z" fill="url(#po)" stroke="#7a1020" stroke-width="1.2"/>'
+    b += f'<ellipse cx="16" cy="14" rx="5" ry="2" fill="#ffd0dc" opacity="0.7"/>'
+    return _svg(32, 32, b)
 
 
-def bg_lava_svg():
-    d = _lin("lsky", [("0", "#2a0e12"), ("0.5", "#7a1e12"), ("1", "#d85a1e")], 0, 0, 0, 540)
-    b = f'<defs>{d}{_rad("sun", [("0", "#ffd24a"), ("1", "#ff6a1e", "0")], 480, 150, 90)}</defs>'
-    b += f'<rect width="960" height="540" fill="url(#lsky)"/>'
-    b += f'<circle cx="480" cy="150" r="90" fill="url(#sun)"/><circle cx="480" cy="150" r="46" fill="#ffb03a"/>'
-    # volcanoes
-    b += f'<path d="M120 470 L260 190 L400 470 Z" fill="#3a1810"/>'
-    b += f'<path d="M560 470 L740 150 L920 470 Z" fill="#2e120c"/>'
-    b += f'<path d="M700 200 Q740 150 780 200 Q760 230 740 210 Q720 230 700 200 Z" fill="#ff7a2a" opacity="0.8"/>'
-    # lava glow band near horizon
-    b += f'<path d="M0 430 Q240 400 480 430 Q720 460 960 425 L960 540 L0 540 Z" fill="#ff5a1e" opacity="0.35"/>'
-    # embers
-    for x, y in [(200, 300), (380, 250), (620, 320), (820, 260), (500, 200)]:
-        b += f'<circle cx="{x}" cy="{y}" r="3" fill="#ffd07a" opacity="0.8"/>'
-    return _svg(960, 540, b)
+def icon_shield_svg():
+    b = f'<defs>{_lin("sd", [("0", "#bfe6ff"), ("1", "#3a78c8")], 0, 2, 0, 30)}</defs>'
+    b += f'<path d="M16 2 L28 7 L28 16 Q28 27 16 31 Q4 27 4 16 L4 7 Z" fill="url(#sd)" stroke="#2a4a7a" stroke-width="1.4"/>'
+    b += f'<path d="M16 8 L16 24 M9 14 L23 14" stroke="#eaf6ff" stroke-width="2" opacity="0.8"/>'
+    return _svg(32, 32, b)
 
 
-def bg_ice_svg():
-    d = _lin("isky", [("0", "#0e1e3a"), ("0.5", "#2a5a8a"), ("1", "#bfe0f0")], 0, 0, 0, 540)
-    b = f'<defs>{d}{_lin("aur", [("0", "#7fffd4", "0.7"), ("1", "#7f7fff", "0")], 0, 120, 960, 200)}</defs>'
-    b += f'<rect width="960" height="540" fill="url(#isky)"/>'
-    # aurora ribbons
-    b += f'<path d="M0 120 Q240 60 480 130 Q720 200 960 110 L960 200 Q720 260 480 200 Q240 150 0 220 Z" fill="url(#aur)" opacity="0.5"/>'
-    # stars
-    for x, y in [(120, 80), (300, 60), (560, 100), (760, 70), (880, 130), (200, 150), (640, 50)]:
-        b += f'<circle cx="{x}" cy="{y}" r="1.8" fill="#eaf6ff"/>'
-    # ice peaks
-    b += f'<path d="M0 380 L160 220 L320 380 Z" fill="#3a5a7a"/>'
-    b += f'<path d="M240 400 L460 200 L680 400 Z" fill="#4a6e94"/>'
-    b += f'<path d="M600 390 L800 240 L960 390 Z" fill="#3a5a7a"/>'
-    b += f'<path d="M240 400 L460 200 L520 290 L400 300 Z" fill="#cfe4f4" opacity="0.7"/>'  # snow cap
-    return _svg(960, 540, b)
+def icon_berserk_svg():
+    b = f'<defs>{_rad("br", [("0", "#ffd24a"), ("1", "#e0401e")], 16, 16, 15)}</defs>'
+    b += f'<circle cx="16" cy="16" r="14" fill="url(#br)" stroke="#8a1e0e" stroke-width="1.4"/>'
+    b += f'<path d="M12 8 L20 8 L15 15 L20 15 L11 26 L14 16 L10 16 Z" fill="#fff3b0"/>'
+    return _svg(32, 32, b)
+
+
+def icon_relic_svg():
+    b = f'<defs>{_lin("rl", [("0", "#f6d98a"), ("1", "#b07a2a")], 0, 2, 0, 30)}</defs>'
+    b += f'<circle cx="16" cy="16" r="13" fill="url(#rl)" stroke="#7a5010" stroke-width="1.4"/>'
+    b += f'<path d="M16 6 L19 13 L26 13 L20 18 L22 25 L16 21 L10 25 L12 18 L6 13 L13 13 Z" fill="#7a5010"/>'
+    return _svg(32, 32, b)
+
+
+# ===========================================================================
+# BACKGROUNDS  (parallax layers, 1280x720; ground band drawn by the engine)
+# Layers: sky (static) + far (slow scroll) + mid (faster scroll).  Far/mid keep
+# their motifs away from the edges so they tile seamlessly when scrolled.
+# ===========================================================================
+
+def sky_forest_svg():
+    d = _lin("sky", [("0", "#152a44"), ("0.55", "#2f5a6e"), ("1", "#5c8f5e")], 0, 0, 0, 720)
+    b = f'<defs>{d}{_rad("moon", [("0", "#f6ffe8"), ("1", "#f6ffe8", "0")], 1030, 130, 70)}</defs>'
+    b += f'<rect width="1280" height="720" fill="url(#sky)"/>'
+    b += f'<circle cx="1030" cy="130" r="70" fill="url(#moon)"/><circle cx="1030" cy="130" r="42" fill="#eef7dd"/>'
+    for x, y, r in [(160, 90, 2), (360, 70, 2.4), (560, 120, 1.8), (760, 60, 2), (900, 150, 2.2)]:
+        b += f'<circle cx="{x}" cy="{y}" r="{r}" fill="#dfeecb" opacity="0.7"/>'
+    return _svg(1280, 720, b)
+
+
+def far_forest_svg():
+    b = ''
+    b += f'<path d="M0 440 Q320 360 640 430 Q960 500 1280 420 L1280 720 L0 720 Z" fill="#24463f" opacity="0.75"/>'
+    for x, s in [(180, 0.9), (520, 0.7), (820, 1.0), (1080, 0.8)]:
+        b += (f'<g transform="translate({x},600) scale({s})">'
+              f'<rect x="-6" y="-70" width="12" height="80" fill="#16281f"/>'
+              f'<path d="M0 -190 L44 -80 L-44 -80 Z" fill="#1a3126" opacity="0.85"/>'
+              f'<path d="M0 -140 L36 -55 L-36 -55 Z" fill="#20392b" opacity="0.85"/></g>')
+    return _svg(1280, 720, b)
+
+
+def mid_forest_svg():
+    b = ''
+    b += f'<path d="M0 560 Q360 500 720 555 Q1000 590 1280 545 L1280 720 L0 720 Z" fill="#173026"/>'
+    for x, s in [(120, 1.25), (420, 0.95), (700, 1.35), (980, 1.05), (1180, 0.9)]:
+        b += (f'<g transform="translate({x},640) scale({s})">'
+              f'<rect x="-7" y="-70" width="14" height="80" fill="#0f1e17"/>'
+              f'<path d="M0 -210 L52 -80 L-52 -80 Z" fill="#12281d"/>'
+              f'<path d="M0 -160 L44 -55 L-44 -55 Z" fill="#16301f"/>'
+              f'<path d="M0 -115 L36 -32 L-36 -32 Z" fill="#1b3a26"/></g>')
+    return _svg(1280, 720, b)
+
+
+def sky_lava_svg():
+    d = _lin("lsky", [("0", "#280c12"), ("0.5", "#7a1e12"), ("1", "#c8501c")], 0, 0, 0, 720)
+    b = f'<defs>{d}{_rad("sun", [("0", "#ffe08a"), ("1", "#ff6a1e", "0")], 640, 180, 150)}</defs>'
+    b += f'<rect width="1280" height="720" fill="url(#lsky)"/>'
+    b += f'<circle cx="640" cy="180" r="150" fill="url(#sun)"/><circle cx="640" cy="180" r="60" fill="#ffb03a"/>'
+    return _svg(1280, 720, b)
+
+
+def far_lava_svg():
+    b = ''
+    b += f'<path d="M120 620 L360 250 L600 620 Z" fill="#3a1810" opacity="0.85"/>'
+    b += f'<path d="M720 620 L980 210 L1240 620 Z" fill="#33140d" opacity="0.85"/>'
+    b += f'<path d="M940 260 Q980 210 1020 260 Q1000 292 980 272 Q960 292 940 260 Z" fill="#ff7a2a" opacity="0.8"/>'
+    b += f'<path d="M0 560 Q320 520 640 555 Q960 590 1280 545 L1280 720 L0 720 Z" fill="#4a1e12" opacity="0.6"/>'
+    return _svg(1280, 720, b)
+
+
+def mid_lava_svg():
+    b = f'<defs>{_lin("glow", [("0", "#ff8a3a", "0.8"), ("1", "#ff3a1e", "0.3")], 0, 590, 0, 720)}</defs>'
+    b += f'<path d="M0 600 Q360 560 720 600 Q1000 630 1280 590 L1280 720 L0 720 Z" fill="#5a1e10"/>'
+    b += f'<path d="M0 640 Q360 610 720 645 Q1000 670 1280 640 L1280 720 L0 720 Z" fill="url(#glow)"/>'
+    for x in (200, 520, 860, 1120):
+        b += f'<path d="M{x-40} 660 Q{x} 600 {x+40} 660 Z" fill="#2a0e08"/>'
+    return _svg(1280, 720, b)
+
+
+def sky_ice_svg():
+    d = _lin("isky", [("0", "#0a1830"), ("0.5", "#284f7e"), ("1", "#a9d2e6")], 0, 0, 0, 720)
+    b = f'<defs>{d}{_lin("aur", [("0", "#7fffd4", "0.7"), ("1", "#8f8fff", "0")], 0, 120, 1280, 260)}</defs>'
+    b += f'<rect width="1280" height="720" fill="url(#isky)"/>'
+    b += f'<path d="M0 140 Q320 70 640 150 Q960 230 1280 120 L1280 240 Q960 320 640 230 Q320 170 0 260 Z" fill="url(#aur)" opacity="0.55"/>'
+    for x, y in [(160, 90), (400, 70), (720, 120), (980, 80), (1150, 150), (280, 170), (860, 60)]:
+        b += f'<circle cx="{x}" cy="{y}" r="2" fill="#eaf6ff"/>'
+    return _svg(1280, 720, b)
+
+
+def far_ice_svg():
+    b = ''
+    b += f'<path d="M40 500 L240 260 L440 500 Z" fill="#33547a" opacity="0.8"/>'
+    b += f'<path d="M360 520 L640 230 L920 520 Z" fill="#3f608c" opacity="0.85"/>'
+    b += f'<path d="M820 510 L1080 300 L1240 510 Z" fill="#33547a" opacity="0.8"/>'
+    b += f'<path d="M360 520 L640 230 L720 350 L560 360 Z" fill="#cfe4f4" opacity="0.55"/>'
+    return _svg(1280, 720, b)
+
+
+def mid_ice_svg():
+    b = ''
+    b += f'<path d="M0 580 Q360 540 720 580 Q1000 610 1280 565 L1280 720 L0 720 Z" fill="#2a4a6e"/>'
+    for x, s in [(180, 1.0), (520, 0.8), (900, 1.1), (1150, 0.7)]:
+        b += (f'<g transform="translate({x},600) scale({s})">'
+              f'<path d="M0 -120 L34 0 L-34 0 Z" fill="#3a5f88"/>'
+              f'<path d="M0 -120 L14 -60 L-6 0 L-34 0 Z" fill="#cfe4f4" opacity="0.5"/></g>')
+    return _svg(1280, 720, b)
+
+
+# realm -> (sky, far, mid) layer sprite names
+BG_LAYERS = {
+    "forest": ("sky_forest", "far_forest", "mid_forest"),
+    "lava": ("sky_lava", "far_lava", "mid_lava"),
+    "ice": ("sky_ice", "far_ice", "mid_ice"),
+}
 
 
 # ===========================================================================
@@ -408,9 +483,19 @@ _REGISTRY = {
     "coin": coin_svg,
     "gem": gem_svg,
     "heart": heart_svg,
-    "bg_forest": bg_forest_svg,
-    "bg_lava": bg_lava_svg,
-    "bg_ice": bg_ice_svg,
+    "icon_potion": icon_potion_svg,
+    "icon_shield": icon_shield_svg,
+    "icon_berserk": icon_berserk_svg,
+    "icon_relic": icon_relic_svg,
+    "sky_forest": sky_forest_svg,
+    "far_forest": far_forest_svg,
+    "mid_forest": mid_forest_svg,
+    "sky_lava": sky_lava_svg,
+    "far_lava": far_lava_svg,
+    "mid_lava": mid_lava_svg,
+    "sky_ice": sky_ice_svg,
+    "far_ice": far_ice_svg,
+    "mid_ice": mid_ice_svg,
 }
 
 
@@ -439,10 +524,21 @@ def base(name: str) -> pygame.Surface:
 
 
 def sprite(name: str, size: tuple[int, int]) -> pygame.Surface:
-    """Return a smoothscaled, cached sprite sized to ``size`` (w, h)."""
+    """Return a crisp, cached sprite sized to ``size`` (w, h).
+
+    Uses pygame-ce's ``load_sized_svg`` to rasterise the vector art directly at the
+    requested resolution (sharp at any scale), falling back to smoothscale.
+    """
     key = (name, int(size[0]), int(size[1]))
     if key not in _scaled_cache:
-        _scaled_cache[key] = pygame.transform.smoothscale(base(name), (key[1], key[2]))
+        path = os.path.join(ASSET_DIR, name + ".svg")
+        if not os.path.exists(path):
+            generate_all()
+        try:
+            surf = pygame.image.load_sized_svg(path, (key[1], key[2])).convert_alpha()
+        except (AttributeError, pygame.error):
+            surf = pygame.transform.smoothscale(base(name), (key[1], key[2]))
+        _scaled_cache[key] = surf
     return _scaled_cache[key]
 
 

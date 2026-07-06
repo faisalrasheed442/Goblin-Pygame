@@ -1,11 +1,14 @@
 """Reusable UI widgets and HUD rendering."""
 from __future__ import annotations
 
+import math
+
 import pygame
 
 from . import art
-from .config import (WIDTH, HEIGHT, WHITE, BLACK, PANEL, PANEL_LIGHT, GOLD, RED, GREEN,
-                     GEM, COIN, HP_BACK, HP_FILL, GREY)
+from .config import (WIDTH, HEIGHT, WHITE, PANEL, PANEL_LIGHT, GOLD, RED, GREEN,
+                     GEM, COIN, HP_BACK, HP_FILL, SUPER_FILL, GREY, CONSUMABLES,
+                     FPS)
 
 _fonts: dict[tuple, pygame.font.Font] = {}
 
@@ -63,17 +66,16 @@ class Button:
     def draw(self, surf):
         col = self.color
         if not self.enabled:
-            col = (60, 62, 74)
+            col = (58, 60, 72)
         elif self.hover:
             col = tuple(min(255, c + 30) for c in self.color)
         pygame.draw.rect(surf, col, self.rect, border_radius=10)
         pygame.draw.rect(surf, (0, 0, 0), self.rect, 3, border_radius=10)
         tc = WHITE if self.enabled else GREY
         if self.sub:
-            text(surf, self.label, (self.rect.centerx, self.rect.centery - 12),
-                 24, tc, center=True)
-            text(surf, self.sub, (self.rect.centerx, self.rect.centery + 12),
-                 16, (210, 214, 224) if self.enabled else GREY, center=True, bold=False)
+            text(surf, self.label, (self.rect.centerx, self.rect.centery - 13), 23, tc, center=True)
+            text(surf, self.sub, (self.rect.centerx, self.rect.centery + 13), 15,
+                 (214, 218, 228) if self.enabled else GREY, center=True, bold=False)
         else:
             text(surf, self.label, self.rect.center, 26, tc, center=True)
 
@@ -81,30 +83,74 @@ class Button:
         return self.enabled and self.rect.collidepoint(pos)
 
 
-def draw_hud(surf, player, prog, stage_name, wave_text):
-    # health bar
-    panel_rect = pygame.Rect(14, 12, 300, 66)
-    panel(surf, panel_rect, alpha=170)
-    text(surf, "HP", (26, 20), 18, WHITE)
-    bar(surf, 60, 22, 240, 16, player.hp / player.max_hp, HP_BACK, HP_FILL)
-    text(surf, f"{max(0, int(player.hp))}/{int(player.max_hp)}", (60 + 240 + 8 - 60, 40), 15,
-         (230, 200, 205), bold=False)
-    # coins & gems
-    ci = art.scaled_by_height("coin", 26)
-    surf.blit(ci, (26, 46))
-    text(surf, str(prog.coins), (56, 48), 22, COIN)
-    gi = art.scaled_by_height("gem", 26)
-    surf.blit(gi, (150, 46))
-    text(surf, str(prog.gems), (180, 48), 22, GEM)
+def _heart(surf, x, y, size, filled):
+    img = art.scaled_by_height("heart", size)
+    if not filled:
+        img = img.copy()
+        img.set_alpha(70)
+    surf.blit(img, (x, y))
 
-    # stage / wave (top-centre)
-    text(surf, stage_name, (WIDTH // 2, 24), 26, WHITE, center=True)
-    text(surf, wave_text, (WIDTH // 2, 52), 18, GOLD, center=True, bold=False)
+
+def draw_hud(surf, game):
+    """Full in-battle HUD: health, super meter, currency, lives, consumables, buffs."""
+    p = game.player
+    prog = game.prog
+    # main panel
+    panel(surf, pygame.Rect(14, 12, 344, 104), alpha=175)
+    text(surf, "HP", (26, 20), 18, WHITE)
+    bar(surf, 66, 22, 250, 16, p.hp / p.max_hp, HP_BACK, HP_FILL)
+    text(surf, f"{max(0, int(p.hp))}/{int(p.max_hp)}", (322, 22), 14, (230, 200, 205), bold=False)
+    text(surf, "SUPER", (26, 46), 15, SUPER_FILL if p.super_ready else (170, 200, 220))
+    bar(surf, 66, 48, 250, 12, p.super / p.super_max, (24, 34, 50), SUPER_FILL, radius=5)
+    if p.super_ready:
+        text(surf, "READY  (E)", (322, 46), 14, SUPER_FILL, bold=True)
+    # currency
+    ci = art.scaled_by_height("coin", 24); surf.blit(ci, (24, 72))
+    text(surf, str(prog.coins), (52, 74), 20, COIN)
+    gi = art.scaled_by_height("gem", 24); surf.blit(gi, (150, 72))
+    text(surf, str(prog.gems), (178, 74), 20, GEM)
+
+    # lives (hearts, top-left under panel)
+    for i in range(max(game.lives, 0)):
+        _heart(surf, 20 + i * 30, 122, 26, True)
+    text(surf, "LIVES", (20 + max(game.lives, 0) * 30 + 6, 126), 16, (230, 200, 205), bold=False)
+
+    # consumable slots (bottom-left)
+    keys = list(CONSUMABLES.keys())
+    icons = {"potion": "icon_potion", "shield": "icon_shield", "berserk": "icon_berserk"}
+    sx, sy = 20, HEIGHT - 92
+    for i, k in enumerate(keys):
+        x = sx + i * 96
+        r = pygame.Rect(x, sy, 88, 72)
+        have = prog.stock[k]
+        col = (34, 40, 58) if have > 0 else (28, 30, 40)
+        pygame.draw.rect(surf, col, r, border_radius=8)
+        pygame.draw.rect(surf, (0, 0, 0), r, 2, border_radius=8)
+        icon = art.scaled_by_height(icons[k], 34)
+        icon = icon if have > 0 else _fade(icon)
+        surf.blit(icon, (x + 8, sy + 8))
+        text(surf, f"x{have}", (x + 50, sy + 12), 20, WHITE if have else GREY)
+        text(surf, CONSUMABLES[k][3], (x + 50, sy + 44), 16, GOLD if have else GREY, bold=False)
+
+    # active buff timers (left, under the lives row)
+    bx = 20
+    if p.shield_t > 0:
+        r = text(surf, f"SHIELD {p.shield_t // FPS + 1}s", (bx, 156), 18, SUPER_FILL)
+        bx = r.right + 16
+    if p.berserk_t > 0:
+        text(surf, f"RAGE {p.berserk_t // FPS + 1}s", (bx, 156), 18, (255, 140, 80))
+
+
+def _fade(img):
+    img = img.copy()
+    img.set_alpha(70)
+    return img
 
 
 def draw_boss_bar(surf, boss):
-    w = 560
+    w = 720
     x = WIDTH // 2 - w // 2
-    y = 92
-    text(surf, boss.name, (WIDTH // 2, y - 6), 22, (255, 210, 210), center=True)
-    bar(surf, x, y + 14, w, 18, boss.hp / boss.max_hp, (46, 16, 20), (232, 74, 74), radius=8)
+    y = 100
+    text(surf, boss.name, (WIDTH // 2, y - 6), 24, (255, 210, 210), center=True)
+    text(surf, f"Phase {boss.phase}/3", (x + w - 44, y - 6), 16, GOLD, bold=False)
+    bar(surf, x, y + 16, w, 20, boss.hp / boss.max_hp, (46, 16, 20), (232, 74, 74), radius=8)

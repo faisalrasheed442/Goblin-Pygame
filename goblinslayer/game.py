@@ -1,9 +1,13 @@
 """Game state machine, main loop and the runtime context shared with entities.
 
 The :class:`Game` object *is* the ``ctx`` handed to every entity's ``update`` call:
-it owns all the live lists (enemies, projectiles, pickups, particles) and exposes
-the small API entities use to affect the world (spawn text, shake the camera, play a
-sound, register a melee hit, report a kill).
+it owns the live lists (enemies, projectiles, pickups, particles) and exposes the
+small API entities use to affect the world (spawn text, shake/flash the camera,
+play a sound, register a melee hit, report a kill).
+
+Rendering is resolution-independent: everything is drawn to a fixed logical canvas
+(config.WIDTH x HEIGHT) which is then scaled to fit any window size — resizable or
+fullscreen (F11) — with letterboxing.
 """
 from __future__ import annotations
 
@@ -14,9 +18,11 @@ import random
 import pygame
 
 from . import art, ui
-from .config import (WIDTH, HEIGHT, FPS, TITLE, GROUND_Y, STAGES, UPGRADES,
-                     WHITE, GOLD, COIN, GEM, RED, GREEN, BLUE, PURPLE, PANEL_LIGHT,
-                     PANEL, BLACK)
+from .background import ParallaxBackground
+from .config import (WIDTH, HEIGHT, FPS, TITLE as CAPTION, GROUND_Y, STAGES, UPGRADES,
+                     CONSUMABLES, EQUIPMENT, LIVES_START, CHARGE_PER_KILL,
+                     CHARGE_PER_SECOND, WHITE, GOLD, COIN, GEM, RED, GREEN, BLUE,
+                     PURPLE, ORANGE, PANEL_LIGHT, BLACK)
 from .entities import (Player, Enemy, Boss, Projectile, Pickup, Particle,
                        FloatingText, burst)
 from .progression import Progression
@@ -24,36 +30,39 @@ from .progression import Progression
 SOUND_DIR = os.path.join(os.path.dirname(__file__), "..", "Game")
 
 # Game states
-TITLE, STORY, PLAYING, SHOP, PAUSE, GAMEOVER, VICTORY, STAGECLEAR = range(8)
-
-# States whose on-screen buttons should be interactive / drawn.
+TITLE, STORY, PLAYING, SHOP, PAUSE, GAMEOVER, VICTORY = range(7)
 BUTTON_STATES = (TITLE, SHOP, GAMEOVER, VICTORY)
 
 
 def _gradient_rect(surf, rect, top, bottom):
-    """Fill a rect with a vertical gradient (cheap, cached per (h,top,bottom))."""
     x, y, w, h = rect
     strip = pygame.Surface((1, h))
     for i in range(h):
         t = i / max(1, h - 1)
-        col = (int(top[0] + (bottom[0] - top[0]) * t),
-               int(top[1] + (bottom[1] - top[1]) * t),
-               int(top[2] + (bottom[2] - top[2]) * t))
-        strip.set_at((0, i), col)
+        strip.set_at((0, i), (int(top[0] + (bottom[0] - top[0]) * t),
+                              int(top[1] + (bottom[1] - top[1]) * t),
+                              int(top[2] + (bottom[2] - top[2]) * t)))
     surf.blit(pygame.transform.scale(strip, (w, h)), (x, y))
 
 
 class Game:
-    def __init__(self, screen):
-        self.screen = screen
-        self.canvas = pygame.Surface((WIDTH, HEIGHT))
+    def __init__(self):
+        # --- display / responsive scaling ---
+        self.fullscreen = False
+        self.win_size = (WIDTH, HEIGHT)
+        self.window = pygame.display.set_mode(self.win_size, pygame.RESIZABLE)
+        pygame.display.set_caption(CAPTION)
+        self.canvas = pygame.Surface((WIDTH, HEIGHT))       # logical frame
+        self.world = pygame.Surface((WIDTH, HEIGHT))        # world layer (for shake)
+        self.view = (1.0, 0, 0)                             # (scale, offx, offy)
+
         self.clock = pygame.time.Clock()
         self.prog = Progression.load()
         self.state = TITLE
         self.running = True
         self.muted = False
 
-        # runtime world lists (populated per stage)
+        # runtime world
         self.player: Player | None = None
         self.enemies: list[Enemy] = []
         self.boss: Boss | None = None
@@ -63,42 +72,43 @@ class Game:
         self.particles: list[Particle] = []
         self.texts: list[FloatingText] = []
         self.platforms: list[pygame.Rect] = []
+        self.bg: ParallaxBackground | None = None
 
+        self.lives = LIVES_START
         self.stage_index = 0
         self.wave_index = 0
         self.wave_queue: list[dict] = []
         self.boss_pending = False
         self.spawn_timer = 0
+        self.behavior = "normal"
+        self.hazard_timer = 120
         self.shake_amt = 0.0
-        self.bg_name = "bg_forest"
-        self.stage_colors = ((74, 130, 74), (36, 70, 40))
+        self.flash_t = 0
+        self.charge_trickle = CHARGE_PER_SECOND / FPS
+        self.stage_colors = ((74, 130, 74), (30, 62, 36))
         self.buttons: list[ui.Button] = []
-        self.banner = ""
-        self.banner_t = 0
-        self.result_stats = {}
+        self.stage_name = ""
+        self.story_text = ""
 
         self._load_sounds()
-        art.generate_all()   # ensure assets exist on disk
+        art.generate_all()
 
-    # ------------------------------------------------------------------
-    # audio
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ audio
     def _load_sounds(self):
         self.sounds = {}
         self.have_audio = pygame.mixer.get_init() is not None
         if not self.have_audio:
             return
         for key, fn in (("bullet", "bullet.wav"), ("hit", "hit.wav")):
-            path = os.path.join(SOUND_DIR, fn)
             try:
-                snd = pygame.mixer.Sound(path)
-                snd.set_volume(0.35 if key == "bullet" else 0.5)
+                snd = pygame.mixer.Sound(os.path.join(SOUND_DIR, fn))
+                snd.set_volume(0.3 if key == "bullet" else 0.5)
                 self.sounds[key] = snd
             except (pygame.error, FileNotFoundError):
                 pass
         try:
             pygame.mixer.music.load(os.path.join(SOUND_DIR, "music.mp3"))
-            pygame.mixer.music.set_volume(0.35)
+            pygame.mixer.music.set_volume(0.32)
             pygame.mixer.music.play(-1)
         except (pygame.error, FileNotFoundError):
             pass
@@ -107,40 +117,37 @@ class Game:
         if not self.muted and key in self.sounds:
             self.sounds[key].play()
 
-    # ------------------------------------------------------------------
-    # ctx API used by entities
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------- ctx entity API
     def add_text(self, x, y, s, color, size=22):
         self.texts.append(FloatingText(x, y, s, color, size))
 
     def shake(self, amount):
-        self.shake_amt = min(24, self.shake_amt + amount)
+        self.shake_amt = min(26, self.shake_amt + amount)
+
+    def flash(self, frames):
+        self.flash_t = max(self.flash_t, frames)
 
     def register_melee(self, reach, damage):
         burst(self, reach.centerx, reach.centery, (200, 230, 255), 6, 4, 4, 12, 0)
         for e in self.enemies:
             if not e.dead and e.hitbox.colliderect(reach):
-                kx = 6 if reach.centerx < e.x else -6
-                e.take_damage(damage, self, kx)
+                e.take_damage(damage, self, kx=(7 if reach.centerx < e.x else -7))
+                self.player.on_deal_damage(damage)
         if self.boss and not self.boss.dead and self.boss.hitbox.colliderect(reach):
             self.boss.take_damage(damage, self)
+            self.player.on_deal_damage(damage)
 
     def on_enemy_killed(self, enemy):
-        self.prog.add_coins(0)   # coins come from pickups; keep score via kills if desired
-        self.banner_pop("+" + str(enemy.coins), COIN)
+        if self.player:
+            self.player.add_charge(CHARGE_PER_KILL)
 
     def on_boss_killed(self, boss):
-        self.banner_pop("BOSS DEFEATED", GOLD)
+        pass
 
-    def banner_pop(self, txt, color):
-        pass  # reserved; floating texts handle feedback
-
-    # ------------------------------------------------------------------
-    # stage management
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------- stage management
     def new_game(self, from_continue=False):
+        self.lives = LIVES_START
         if not from_continue:
-            # fresh run keeps meta upgrades but restarts at stage 0
             self.prog.stage = 0
         self.stage_index = self.prog.stage if from_continue else 0
         self.start_stage(self.stage_index)
@@ -148,16 +155,21 @@ class Game:
     def start_stage(self, index):
         self.stage_index = index
         cfg = STAGES[index]
-        self.bg_name = "bg_" + cfg["bg"]
         self.stage_colors = (cfg["ground_top"], cfg["ground_bot"])
+        self.behavior = cfg["behavior"]
+        self.bg = ParallaxBackground(cfg["bg"], cfg["ambient"])
         self.player = Player(self.prog.stats())
-        self.enemies.clear(); self.player_shots.clear(); self.enemy_shots.clear()
-        self.pickups.clear(); self.particles.clear(); self.texts.clear()
+        if self.behavior == "ice":
+            self.player.friction = 0.93        # slippery floor
+        for lst in (self.enemies, self.player_shots, self.enemy_shots,
+                    self.pickups, self.particles, self.texts):
+            lst.clear()
         self.boss = None
         self.boss_pending = False
         self.wave_queue = list(cfg["waves"])
         self.wave_index = 0
-        self.spawn_timer = 30
+        self.spawn_timer = 40
+        self.hazard_timer = 180
         self.platforms = self._platforms_for(index)
         self.state = STORY
         self.story_text = cfg["story"]
@@ -166,11 +178,11 @@ class Game:
 
     def _platforms_for(self, index):
         layouts = [
-            [pygame.Rect(250, 360, 150, 16), pygame.Rect(560, 320, 160, 16)],
-            [pygame.Rect(150, 350, 140, 16), pygame.Rect(430, 300, 150, 16),
-             pygame.Rect(720, 350, 140, 16)],
-            [pygame.Rect(210, 350, 150, 16), pygame.Rect(500, 305, 160, 16),
-             pygame.Rect(730, 355, 140, 16)],
+            [pygame.Rect(320, 470, 200, 20), pygame.Rect(760, 410, 220, 20)],
+            [pygame.Rect(200, 460, 200, 20), pygame.Rect(560, 400, 220, 20),
+             pygame.Rect(940, 470, 200, 20)],
+            [pygame.Rect(280, 470, 210, 20), pygame.Rect(650, 405, 230, 20),
+             pygame.Rect(980, 475, 200, 20)],
         ]
         return layouts[min(index, len(layouts) - 1)]
 
@@ -179,90 +191,126 @@ class Game:
             return
         wave = self.wave_queue.pop(0)
         self.wave_index += 1
-        # "Life Font" upgrade: heal between waves
-        regen = self.player.stats.get("regen", 0)
-        if regen and self.wave_index > 1:
-            self.player.heal(regen)
-            self.add_text(self.player.x + self.player.w / 2, self.player.y - 10,
-                          f"+{int(regen)}", GREEN, 18)
+        if self.wave_index > 1 and self.player:      # small heal between waves
+            self.player.heal(8)
         for kind, count in wave.items():
             for _ in range(count):
-                side = random.choice([-1, 1])
-                x = -40 if side < 0 else WIDTH + 10
-                x = random.randint(40, WIDTH - 80) if kind == "bat" else x
-                e = Enemy(kind, x, self.stage_index)
-                self.enemies.append(e)
+                if kind == "bat":
+                    x = random.randint(60, WIDTH - 120)
+                else:
+                    x = -50 if random.random() < 0.5 else WIDTH + 20
+                self.enemies.append(Enemy(kind, x, self.stage_index))
 
     def spawn_boss(self):
-        cfg = STAGES[self.stage_index]
-        self.boss = Boss(cfg["boss"], self.stage_index)
+        self.boss = Boss(STAGES[self.stage_index]["boss"], self.stage_index)
         self.boss_pending = False
 
-    # ------------------------------------------------------------------
-    # main loop
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------- main loop
     def run(self):
         while self.running:
-            dt = self.clock.tick(FPS)
+            self.clock.tick(FPS)
             self.handle_events()
             self.update()
             self.draw()
         self.prog.save()
 
+    def _to_logical(self, pos):
+        scale, offx, offy = self.view
+        return ((pos[0] - offx) / scale, (pos[1] - offy) / scale)
+
     def handle_events(self):
-        mouse = pygame.mouse.get_pos()
+        mouse = self._to_logical(pygame.mouse.get_pos())
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 self.running = False
+            elif ev.type == pygame.VIDEORESIZE and not self.fullscreen:
+                self.win_size = (max(640, ev.w), max(360, ev.h))
+                self.window = pygame.display.set_mode(self.win_size, pygame.RESIZABLE)
             elif ev.type == pygame.KEYDOWN:
                 self._keydown(ev.key)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 if self.state in BUTTON_STATES:
-                    self._click(ev.pos)
+                    self._click(self._to_logical(ev.pos))
         if self.state in BUTTON_STATES:
             for b in self.buttons:
                 b.update(mouse)
 
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        if self.fullscreen:
+            self.window = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            self.win_size = self.window.get_size()
+        else:
+            self.win_size = (WIDTH, HEIGHT)
+            self.window = pygame.display.set_mode(self.win_size, pygame.RESIZABLE)
+
     def _keydown(self, key):
+        if key == pygame.K_F11:
+            self.toggle_fullscreen()
+            return
         if key == pygame.K_m:
             self.muted = not self.muted
             if self.have_audio:
-                pygame.mixer.music.set_volume(0.0 if self.muted else 0.35)
+                pygame.mixer.music.set_volume(0.0 if self.muted else 0.32)
         if self.state == TITLE:
             if key in (pygame.K_RETURN, pygame.K_SPACE):
-                self.new_game(from_continue=False)
+                self.new_game(False)
         elif self.state == STORY:
             if key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.state = PLAYING
         elif self.state == PLAYING:
             if key in (pygame.K_ESCAPE, pygame.K_p):
                 self.state = PAUSE
+            elif key in (pygame.K_e, pygame.K_q):
+                self.player.use_super(self)
+            elif key == pygame.K_1:
+                self.use_consumable("potion")
+            elif key == pygame.K_2:
+                self.use_consumable("shield")
+            elif key == pygame.K_3:
+                self.use_consumable("berserk")
         elif self.state == PAUSE:
             if key in (pygame.K_ESCAPE, pygame.K_p):
                 self.state = PLAYING
         elif self.state in (GAMEOVER, VICTORY):
             if key in (pygame.K_RETURN, pygame.K_SPACE):
-                self.state = TITLE
-                self.build_title_buttons()
+                self._to_title()
 
     def _click(self, pos):
         for b in self.buttons:
             if b.clicked(pos):
-                b.action() if hasattr(b, "action") else None
+                b.action()
                 return
 
-    # ------------------------------------------------------------------
-    # update dispatch
-    # ------------------------------------------------------------------
+    def use_consumable(self, key):
+        if not self.player or self.prog.stock.get(key, 0) <= 0:
+            return
+        self.prog.use_consumable(key)
+        px, py = self.player.x + self.player.w / 2, self.player.y
+        if key == "potion":
+            self.player.heal(45)
+            self.add_text(px, py, "+45", GREEN, 22)
+        elif key == "shield":
+            self.player.start_shield(5 * FPS)
+            self.add_text(px, py, "SHIELD", BLUE, 22)
+        elif key == "berserk":
+            self.player.start_berserk(7 * FPS)
+            self.add_text(px, py, "RAGE", ORANGE, 22)
+        self.play("bullet")
+
+    # --------------------------------------------------------- update dispatch
     def update(self):
         self.shake_amt *= 0.85
+        self.flash_t = max(0, self.flash_t - 1)
         if self.state == TITLE and not self.buttons:
             self.build_title_buttons()
+        if self.bg:
+            bias = abs(self.player.vx) * 0.15 if (self.state == PLAYING and self.player) else 0.0
+            self.bg.update(bias)
         if self.state == PLAYING:
             self.update_playing()
         elif self.state == SHOP and not self.buttons:
             self.build_shop_buttons()
-        self.banner_t = max(0, self.banner_t - 1)
 
     def update_playing(self):
         p = self.player
@@ -270,20 +318,30 @@ class Game:
         p.handle_input(keys, self)
         p.update(self)
 
-        # spawning logic
+        # spawning waves -> boss
         if self.wave_queue or self.enemies:
             if not self.enemies and self.spawn_timer <= 0 and self.wave_queue:
                 self.spawn_wave()
-                self.spawn_timer = 20
+                self.spawn_timer = 24
             self.spawn_timer -= 1
-        elif not self.boss and not self.boss_pending and not self.enemies and not self.wave_queue:
-            # all waves cleared -> boss
+        elif not self.boss and not self.boss_pending:
             self.boss_pending = True
-            self.spawn_timer = 40
+            self.spawn_timer = 48
         if self.boss_pending:
             self.spawn_timer -= 1
             if self.spawn_timer <= 0:
                 self.spawn_boss()
+
+        # stage hazard: meteor rain in the Ember Wastes
+        if self.behavior == "meteors":
+            self.hazard_timer -= 1
+            if self.hazard_timer <= 0:
+                self.hazard_timer = random.randint(90, 170)
+                for _ in range(random.randint(1, 3)):
+                    rx = random.randint(40, WIDTH - 40)
+                    self.enemy_shots.append(Projectile(rx, -20, random.uniform(-1, 1), 6,
+                                                       14, "fireball", 30, False,
+                                                       spin=True, gravity=0.06))
 
         for e in self.enemies:
             e.update(self)
@@ -292,10 +350,8 @@ class Game:
         if self.boss:
             self.boss.update(self)
 
-        # projectiles
         self._update_shots()
 
-        # pickups
         alive = []
         for pk in self.pickups:
             if pk.update(self):
@@ -304,12 +360,9 @@ class Game:
                 self._collect(pk)
         self.pickups = alive
 
-        # particles & texts
         self.particles = [pt for pt in self.particles if pt.update()]
         self.texts = [t for t in self.texts if t.update()]
 
-        # regen tick handled at wave clear; passive regen on wave transitions
-        # death / clear checks
         if p.hp <= 0:
             self.on_player_death()
         if self.boss and self.boss.dead:
@@ -323,11 +376,13 @@ class Game:
             hit = False
             for e in self.enemies:
                 if not e.dead and b.rect.colliderect(e.hitbox):
-                    e.take_damage(b.damage, self, kx=3 * (1 if b.vx > 0 else -1))
+                    e.take_damage(b.damage, self, kx=(3 if b.vx > 0 else -3))
+                    p.on_deal_damage(b.damage)
                     hit = True
                     break
             if not hit and self.boss and not self.boss.dead and b.rect.colliderect(self.boss.hitbox):
                 self.boss.take_damage(b.damage, self)
+                p.on_deal_damage(b.damage)
                 hit = True
             if alive and not hit:
                 keep.append(b)
@@ -352,32 +407,39 @@ class Game:
             self.add_text(pk.x, pk.y - 10, "+5", COIN, 18)
         elif pk.kind == "gem":
             self.prog.add_gems(1)
-            self.add_text(pk.x, pk.y - 10, "+1", GEM, 20)
+            self.add_text(pk.x, pk.y - 10, "+1 gem", GEM, 20)
         elif pk.kind == "heart":
-            self.player.heal(15)
-            self.add_text(pk.x, pk.y - 10, "+15", GREEN, 18)
+            self.player.heal(18)
+            self.add_text(pk.x, pk.y - 10, "+18", GREEN, 18)
 
-    # ------------------------------------------------------------------
-    # state transitions
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------- state transitions
     def on_player_death(self):
-        self.prog.save()
-        self.result_stats = {"stage": self.stage_index}
-        self.state = GAMEOVER
-        self.buttons = []
-        self.build_gameover_buttons()
+        self.lives -= 1
+        if self.lives > 0:
+            # respawn
+            p = self.player
+            p.hp = p.max_hp
+            p.x, p.y = 160, GROUND_Y - p.h
+            p.vx = p.vy = 0
+            p.iframes = 2 * FPS
+            p.shield_t = p.berserk_t = 0
+            self.enemy_shots.clear()
+            self.add_text(WIDTH // 2, HEIGHT // 2 - 40, f"{self.lives} LIVES LEFT", RED, 34)
+            self.flash(8)
+        else:
+            self.prog.save()
+            self.state = GAMEOVER
+            self.build_gameover_buttons()
 
     def on_stage_complete(self):
         self.boss = None
-        # clear transient combat objects so the frozen shop backdrop stays clean
         self.player_shots.clear()
         self.enemy_shots.clear()
+        self.prog.best_stage = max(self.prog.best_stage, self.stage_index)
         self.prog.stage = min(len(STAGES) - 1, self.stage_index + 1)
-        # passive life-font regen reward
         self.prog.save()
         if self.stage_index >= len(STAGES) - 1:
             self.state = VICTORY
-            self.buttons = []
             self.build_victory_buttons()
         else:
             self.state = SHOP
@@ -387,9 +449,7 @@ class Game:
         self.start_stage(self.stage_index + 1)
         self.buttons = []
 
-    # ------------------------------------------------------------------
-    # button builders (each button gets an .action closure)
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------- button builders
     def _mk(self, rect, label, action, sub="", color=PANEL_LIGHT, enabled=True):
         b = ui.Button(rect, label, sub, color, enabled)
         b.action = action
@@ -397,18 +457,14 @@ class Game:
 
     def build_title_buttons(self):
         cx = WIDTH // 2
-        self.buttons = [
-            self._mk((cx - 130, 350, 260, 54), "NEW GAME",
-                     lambda: self.new_game(False), color=(70, 110, 180)),
-        ]
+        self.buttons = [self._mk((cx - 150, 470, 300, 56), "NEW GAME",
+                                 lambda: self.new_game(False), color=(70, 110, 180))]
         if self.prog.stage > 0:
-            self.buttons.append(self._mk(
-                (cx - 130, 414, 260, 48), "CONTINUE",
-                lambda: self.new_game(True),
-                sub=f"Realm {self.prog.stage + 1}", color=(60, 130, 90)))
-        self.buttons.append(self._mk(
-            (cx - 130, 474, 260, 40), "RESET PROGRESS",
-            self.reset_progress, color=(120, 60, 70)))
+            self.buttons.append(self._mk((cx - 150, 538, 300, 50), "CONTINUE",
+                                         lambda: self.new_game(True),
+                                         sub=f"Realm {self.prog.stage + 1}", color=(60, 130, 90)))
+        self.buttons.append(self._mk((cx - 150, 598, 300, 42), "RESET PROGRESS",
+                                     self.reset_progress, color=(120, 60, 70)))
 
     def reset_progress(self):
         Progression.clear_save()
@@ -417,69 +473,92 @@ class Game:
 
     def build_shop_buttons(self):
         self.buttons = []
+        # upgrades: 3x2 grid on the left
         keys = list(UPGRADES.keys())
-        cols, rows = 3, 2
-        bw, bh = 250, 92
-        gap = 20
-        gx = (WIDTH - (cols * bw + (cols - 1) * gap)) // 2
-        gy = 190
+        bw, bh, gap = 250, 82, 16
+        gx, gy = 70, 190
         for i, k in enumerate(keys):
-            r = i // cols
-            c = i % cols
-            rect = (gx + c * (bw + gap), gy + r * (bh + gap), bw, bh)
-            self.buttons.append(self._make_upgrade_button(rect, k))
-        self.buttons.append(self._mk(
-            (WIDTH // 2 - 150, 470, 300, 50), "ENTER NEXT REALM",
-            self.next_stage_from_shop, color=(70, 130, 90)))
+            rect = (gx + (i % 3) * (bw + gap), gy + (i // 3) * (bh + gap), bw, bh)
+            self.buttons.append(self._upgrade_btn(rect, k))
+        # consumables: row
+        cw = 250
+        cy = 400
+        for i, k in enumerate(CONSUMABLES):
+            rect = (gx + i * (cw + gap), cy, cw, 74)
+            self.buttons.append(self._consumable_btn(rect, k))
+        # relics: row
+        rw = 250
+        ry = 496
+        for i, k in enumerate(EQUIPMENT):
+            rect = (gx + i * (rw + gap), ry, rw, 74)
+            self.buttons.append(self._relic_btn(rect, k))
+        self.buttons.append(self._mk((WIDTH // 2 - 170, 600, 340, 54),
+                                     "ENTER NEXT REALM", self.next_stage_from_shop,
+                                     color=(70, 130, 90)))
 
-    def _make_upgrade_button(self, rect, key):
-        label, desc, *_ = UPGRADES[key]
+    def _upgrade_btn(self, rect, key):
+        label = UPGRADES[key][0]
         lvl = self.prog.levels[key]
         maxed = self.prog.is_maxed(key)
         cost = self.prog.cost(key)
-        sub = "MAX LEVEL" if maxed else f"Lv{lvl}  •  {desc}  •  {cost}c"
+        sub = "MAX" if maxed else f"Lv{lvl} • {UPGRADES[key][1]} • {cost}c"
         color = (60, 100, 150) if self.prog.can_buy(key) else (56, 60, 76)
         b = ui.Button(rect, label, sub, color, enabled=not maxed)
+        b.action = lambda k=key: (self.prog.buy(k) and self.play("bullet"),
+                                  self.build_shop_buttons())
+        return b
 
-        def act(k=key):
-            if self.prog.buy(k):
-                self.play("bullet")
-                self.build_shop_buttons()
-        b.action = act
+    def _consumable_btn(self, rect, key):
+        label, desc, cost, hot = CONSUMABLES[key]
+        have = self.prog.stock[key]
+        sub = f"{desc} • {cost}c • have {have}"
+        color = (110, 80, 60) if self.prog.coins >= cost else (56, 60, 76)
+        b = ui.Button(rect, f"{label} [{hot}]", sub, color, enabled=self.prog.coins >= cost)
+        b.action = lambda k=key: (self.prog.buy_consumable(k) and self.play("bullet"),
+                                  self.build_shop_buttons())
+        return b
+
+    def _relic_btn(self, rect, key):
+        label, desc, cost = EQUIPMENT[key]
+        owned = self.prog.has(key)
+        sub = "OWNED" if owned else f"{desc} • {cost} gems"
+        color = (70, 110, 70) if owned else ((90, 70, 120) if self.prog.gems >= cost else (56, 60, 76))
+        b = ui.Button(rect, label, sub, color, enabled=(not owned and self.prog.gems >= cost))
+        b.action = lambda k=key: (self.prog.buy_relic(k) and self.play("bullet"),
+                                  self.build_shop_buttons())
         return b
 
     def build_gameover_buttons(self):
-        self.buttons = [self._mk(
-            (WIDTH // 2 - 130, 360, 260, 50), "RETURN TO TITLE",
-            self._to_title, color=(90, 70, 90))]
+        self.buttons = [self._mk((WIDTH // 2 - 150, 470, 300, 54),
+                                 "RETURN TO TITLE", self._to_title, color=(90, 70, 90))]
 
     def build_victory_buttons(self):
-        self.buttons = [self._mk(
-            (WIDTH // 2 - 130, 400, 260, 50), "RETURN TO TITLE",
-            self._to_title, color=(70, 120, 100))]
+        self.buttons = [self._mk((WIDTH // 2 - 150, 520, 300, 54),
+                                 "RETURN TO TITLE", self._to_title, color=(70, 120, 100))]
 
     def _to_title(self):
         self.state = TITLE
         self.build_title_buttons()
 
-    # ------------------------------------------------------------------
-    # rendering
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------- render
     def draw(self):
-        if self.state in (PLAYING, PAUSE, SHOP, STAGECLEAR):
-            self.draw_world(self.canvas)
-        elif self.state == STORY:
-            self.canvas.blit(art.sprite(self.bg_name, (WIDTH, HEIGHT)), (0, 0))
+        if self.state in (PLAYING, PAUSE, SHOP):
+            self.draw_world()
+        elif self.state == STORY and self.bg:
+            self.bg.draw(self.world)
+            self.canvas.blit(self.world, (0, 0))
         else:
-            self.canvas.blit(art.sprite("bg_forest", (WIDTH, HEIGHT)), (0, 0))
+            self.canvas.fill((14, 18, 30))
+            if self.bg:
+                self.bg.draw(self.canvas)
 
-        # apply screen shake by blitting canvas offset
-        self.screen.fill(BLACK)
-        dx = random.uniform(-self.shake_amt, self.shake_amt)
-        dy = random.uniform(-self.shake_amt, self.shake_amt)
-        self.screen.blit(self.canvas, (dx, dy))
+        if self.state in (PLAYING, PAUSE, SHOP):
+            dx = random.uniform(-self.shake_amt, self.shake_amt)
+            dy = random.uniform(-self.shake_amt, self.shake_amt)
+            self.canvas.fill(BLACK)
+            self.canvas.blit(self.world, (dx, dy))
 
-        # overlays drawn straight to screen (unshaken)
+        # overlays
         if self.state == TITLE:
             self.draw_title()
         elif self.state == STORY:
@@ -497,23 +576,37 @@ class Game:
 
         if self.state in BUTTON_STATES:
             for b in self.buttons:
-                b.draw(self.screen)
+                b.draw(self.canvas)
+
+        if self.flash_t > 0:
+            fl = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            fl.fill((255, 255, 255, min(200, self.flash_t * 22)))
+            self.canvas.blit(fl, (0, 0))
+
+        self._present()
+
+    def _present(self):
+        win_w, win_h = self.window.get_size()
+        scale = min(win_w / WIDTH, win_h / HEIGHT)
+        sw, sh = int(WIDTH * scale), int(HEIGHT * scale)
+        offx, offy = (win_w - sw) // 2, (win_h - sh) // 2
+        self.view = (scale, offx, offy)
+        self.window.fill(BLACK)
+        self.window.blit(pygame.transform.smoothscale(self.canvas, (sw, sh)), (offx, offy))
         pygame.display.flip()
 
-    def draw_world(self, s):
-        s.blit(art.sprite(self.bg_name, (WIDTH, HEIGHT)), (0, 0))
-        # ground band
+    def draw_world(self):
+        s = self.world
+        self.bg.draw(s)
+        self.bg.draw_ambient(s)
         _gradient_rect(s, (0, GROUND_Y, WIDTH, HEIGHT - GROUND_Y),
                        self.stage_colors[0], self.stage_colors[1])
         pygame.draw.line(s, tuple(min(255, c + 40) for c in self.stage_colors[0]),
                          (0, GROUND_Y), (WIDTH, GROUND_Y), 3)
-        # platforms
         for plat in self.platforms:
             pygame.draw.rect(s, self.stage_colors[1], plat, border_radius=6)
-            top = pygame.Rect(plat.x, plat.y, plat.w, 6)
             pygame.draw.rect(s, tuple(min(255, c + 40) for c in self.stage_colors[0]),
-                             top, border_radius=6)
-        # pickups behind actors
+                             pygame.Rect(plat.x, plat.y, plat.w, 6), border_radius=6)
         for pk in self.pickups:
             pk.draw(s)
         for e in self.enemies:
@@ -538,78 +631,76 @@ class Game:
             wave_txt = "BOSS BATTLE"
         elif self.wave_queue or self.enemies:
             total = len(STAGES[self.stage_index]["waves"])
-            wave_txt = f"Wave {min(self.wave_index, total)}/{total}  •  Enemies: {len(self.enemies)}"
+            wave_txt = f"Wave {min(self.wave_index, total)}/{total}  •  Enemies {len(self.enemies)}"
         else:
-            wave_txt = "Clearing..."
-        ui.draw_hud(self.screen, self.player, self.prog, self.stage_name, wave_txt)
+            wave_txt = "The ground trembles..."
+        ui.draw_hud(self.canvas, self)
+        ui.text(self.canvas, self.stage_name, (WIDTH // 2, 26), 30, WHITE, center=True)
+        ui.text(self.canvas, wave_txt, (WIDTH // 2, 60), 20, GOLD, center=True, bold=False)
         if self.boss and not self.boss.dead and self.boss.intro <= 0:
-            ui.draw_boss_bar(self.screen, self.boss)
-        # controls hint
-        ui.text(self.screen, "Move: A/D  Jump: W  Shoot: J  Slash: K  Pause: Esc",
-                (WIDTH // 2, HEIGHT - 22), 15, (220, 224, 232), center=True, bold=False)
+            ui.draw_boss_bar(self.canvas, self.boss)
+        ui.text(self.canvas, "A/D move • W jump • J shoot • K slash • E super • 1/2/3 items • Esc pause • F11 fullscreen",
+                (WIDTH // 2, HEIGHT - 20), 15, (220, 224, 232), center=True, bold=False)
 
-    # ---- menu screens -----------------------------------------------------
     def _dim(self, alpha=150):
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill((6, 8, 14, alpha))
-        self.screen.blit(overlay, (0, 0))
+        self.canvas.blit(overlay, (0, 0))
 
     def draw_title(self):
         self._dim(120)
-        ui.text(self.screen, "GOBLIN SLAYER", (WIDTH // 2, 120), 74, GOLD, center=True)
-        ui.text(self.screen, "Realms of the Fallen", (WIDTH // 2, 176), 32,
-                (220, 224, 235), center=True, bold=False)
-        # hero showcase
-        hero = art.scaled_by_height(["hero", "hero_t1", "hero_t2"][self.prog.tier()], 118)
-        self.screen.blit(hero, (WIDTH // 2 - hero.get_width() // 2, 214))
-        ui.text(self.screen, f"Coins {self.prog.coins}   Gems {self.prog.gems}   •   Tier {self.prog.tier() + 1}",
-                (WIDTH // 2, HEIGHT - 22), 18, WHITE, center=True, bold=False)
-        ui.text(self.screen, "M: mute", (WIDTH - 60, 18), 14,
+        ui.text(self.canvas, "GOBLIN SLAYER", (WIDTH // 2, 150), 92, GOLD, center=True)
+        ui.text(self.canvas, "Realms of the Fallen", (WIDTH // 2, 224), 38,
+                (222, 226, 236), center=True, bold=False)
+        hero = art.scaled_by_height(["hero", "hero_t1", "hero_t2"][self.prog.tier()], 160)
+        self.canvas.blit(hero, (WIDTH // 2 - hero.get_width() // 2, 280))
+        ui.text(self.canvas, f"Coins {self.prog.coins}   Gems {self.prog.gems}   •   Knight Tier {self.prog.tier() + 1}",
+                (WIDTH // 2, HEIGHT - 26), 20, WHITE, center=True, bold=False)
+        ui.text(self.canvas, "M mute • F11 fullscreen", (WIDTH - 130, 20), 15,
                 (180, 184, 196), center=True, bold=False)
 
     def draw_story(self):
         self._dim(150)
-        panel = pygame.Rect(WIDTH // 2 - 340, 150, 680, 240)
-        ui.panel(self.screen, panel)
-        ui.text(self.screen, self.stage_name, (WIDTH // 2, 185), 40, GOLD, center=True)
-        y = 240
+        rect = pygame.Rect(WIDTH // 2 - 400, 210, 800, 300)
+        ui.panel(self.canvas, rect)
+        ui.text(self.canvas, self.stage_name, (WIDTH // 2, 250), 48, GOLD, center=True)
+        y = 320
         for line in self.story_text.split("\n"):
-            ui.text(self.screen, line, (WIDTH // 2, y), 22, WHITE, center=True, bold=False)
-            y += 34
-        ui.text(self.screen, "Press ENTER to begin", (WIDTH // 2, 360), 20,
+            ui.text(self.canvas, line, (WIDTH // 2, y), 24, WHITE, center=True, bold=False)
+            y += 38
+        ui.text(self.canvas, "Press ENTER to begin", (WIDTH // 2, 470), 22,
                 (200, 230, 255), center=True)
 
     def draw_pause(self):
-        self._dim(150)
-        ui.text(self.screen, "PAUSED", (WIDTH // 2, HEIGHT // 2 - 40), 60, WHITE, center=True)
-        ui.text(self.screen, "Press Esc to resume  •  M to mute",
-                (WIDTH // 2, HEIGHT // 2 + 30), 22, (210, 214, 224), center=True, bold=False)
+        self._dim(160)
+        ui.text(self.canvas, "PAUSED", (WIDTH // 2, HEIGHT // 2 - 40), 72, WHITE, center=True)
+        ui.text(self.canvas, "Esc resume • M mute • F11 fullscreen",
+                (WIDTH // 2, HEIGHT // 2 + 34), 24, (210, 214, 224), center=True, bold=False)
 
     def draw_shop(self):
-        self._dim(170)
-        ui.text(self.screen, "REALM CLEARED", (WIDTH // 2, 70), 52, GOLD, center=True)
-        ui.text(self.screen, "Spend your spoils, then march onward.",
-                (WIDTH // 2, 120), 22, WHITE, center=True, bold=False)
-        # currency
-        ci = art.scaled_by_height("coin", 28); self.screen.blit(ci, (WIDTH // 2 - 130, 146))
-        ui.text(self.screen, str(self.prog.coins), (WIDTH // 2 - 96, 148), 24, COIN)
-        gi = art.scaled_by_height("gem", 28); self.screen.blit(gi, (WIDTH // 2 + 40, 146))
-        ui.text(self.screen, str(self.prog.gems), (WIDTH // 2 + 74, 148), 24, GEM)
+        self._dim(180)
+        ui.text(self.canvas, "REALM CLEARED", (WIDTH // 2, 60), 56, GOLD, center=True)
+        ci = art.scaled_by_height("coin", 30); self.canvas.blit(ci, (WIDTH // 2 - 150, 104))
+        ui.text(self.canvas, str(self.prog.coins), (WIDTH // 2 - 112, 106), 26, COIN)
+        gi = art.scaled_by_height("gem", 30); self.canvas.blit(gi, (WIDTH // 2 + 40, 104))
+        ui.text(self.canvas, str(self.prog.gems), (WIDTH // 2 + 78, 106), 26, GEM)
+        ui.text(self.canvas, "UPGRADES (coins)", (76, 166), 20, (200, 220, 255))
+        ui.text(self.canvas, "CONSUMABLES (coins)", (76, 378), 20, (255, 210, 160))
+        ui.text(self.canvas, "RELICS — permanent (gems)", (76, 474), 20, (200, 180, 255))
 
     def draw_gameover(self):
-        self._dim(170)
-        ui.text(self.screen, "YOU HAVE FALLEN", (WIDTH // 2, 200), 60, RED, center=True)
-        ui.text(self.screen, f"You reached {STAGES[self.result_stats.get('stage', 0)]['name']}",
-                (WIDTH // 2, 270), 24, WHITE, center=True, bold=False)
-        ui.text(self.screen, "Your coins and upgrades are kept. Try again!",
-                (WIDTH // 2, 310), 20, (210, 214, 224), center=True, bold=False)
+        self._dim(180)
+        ui.text(self.canvas, "YOU HAVE FALLEN", (WIDTH // 2, 260), 74, RED, center=True)
+        ui.text(self.canvas, f"You reached {STAGES[self.stage_index]['name']}",
+                (WIDTH // 2, 340), 26, WHITE, center=True, bold=False)
+        ui.text(self.canvas, "Coins, upgrades and relics are kept. Try again!",
+                (WIDTH // 2, 384), 22, (210, 214, 224), center=True, bold=False)
 
     def draw_victory(self):
-        self._dim(170)
-        ui.text(self.screen, "VICTORY!", (WIDTH // 2, 150), 74, GOLD, center=True)
+        self._dim(180)
+        ui.text(self.canvas, "VICTORY!", (WIDTH // 2, 190), 92, GOLD, center=True)
         for i, line in enumerate([
                 "The Goblin King is slain and the Aether Crystals reclaimed.",
                 "Aethermoor rises from the ashes — and you are its legend.",
-                f"Gems collected: {self.prog.gems}"]):
-            ui.text(self.screen, line, (WIDTH // 2, 240 + i * 40), 22, WHITE,
-                    center=True, bold=False)
+                f"Gems collected: {self.prog.gems}   •   Knight Tier {self.prog.tier() + 1}"]):
+            ui.text(self.canvas, line, (WIDTH // 2, 300 + i * 44), 24, WHITE, center=True, bold=False)
